@@ -1,15 +1,13 @@
 import spacy
 from spacy.lang.en.examples import sentences
 import pandas as pd
+from clean_csv import load_dataset
+
+# Get dataset
+dataset = load_dataset("email_spam.csv")
 
 # Loading english pipeline
 nlp = spacy.load('en_core_web_sm')
 
-# Load the haram dataset
-data = pd.read_csv("email_spam.csv", encoding="utf-8", encoding_errors="replace")
-
-# Merge data in one table
-for message in data:
-    message.column
-
-print(f)
+# Get vector representation of sentences
+dataset['vector'] = dataset['messages'].apply(lambda x: nlp(x).vector)
