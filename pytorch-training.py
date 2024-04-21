@@ -1,10 +1,27 @@
-from clean_csv import prepare_input_data
+from clean_csv import prepare_input_data, get_vocab_len, build_vocab, tokenize_with_vocab
 from torch.utils.data import Dataset, random_split, DataLoader
 from torch import nn
 import torch
 
 EPOCHS = 1024
 BATCH = 64
+
+class EarlyStopper:
+    def __init__(self, patience=1, min_delta=0):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.min_validation_loss = float('inf')
+
+    def early_stop(self, validation_loss):
+        if validation_loss < self.min_validation_loss:
+            self.min_validation_loss = validation_loss
+            self.counter = 0
+        elif validation_loss > (self.min_validation_loss + self.min_delta):
+            self.counter += 1
+            if self.counter >= self.patience:
+                return True
+        return False
 
 # Define dataset
 class SpamDataset(Dataset):
@@ -20,27 +37,31 @@ class SpamDataset(Dataset):
     
 # Define model
 class NeuralNetwork(nn.Module):
-    def __init__(self):
+    def __init__(self, vocab_size, embedding_dim):
         super(NeuralNetwork, self).__init__()
-        self.linear1 = nn.Linear(96, 96)
+        self.word_embeddings = nn.Embedding(vocab_size, embedding_dim)
+        self.lstm1 = nn.LSTM(embedding_dim, embedding_dim)
+        self.flat = nn.Flatten()
+        self.linear1 = nn.Linear(embedding_dim * embedding_dim, 32)
         self.relu1 = nn.ReLU()
-        self.linear2 = nn.Linear(96, 32)
-        self.relu2 = nn.ReLU()
-        self.linear3 = nn.Linear(32, 2)
+        self.linear2 = nn.Linear(32, 2)
+        self.softmax = nn.Softmax()
 
     def forward(self, x):
+        x = self.word_embeddings(x)
+        x, (final_hidden_state, final_cell_state) = self.lstm1(x)
+        x = self.flat(x)
         x = self.linear1(x)
         x = self.relu1(x)
         x = self.linear2(x)
-        x = self.relu2(x)
-        x = self.linear3(x)
+        x = self.softmax(x)
         return x
 
 # Training loop
 def train(dataloader, model, loss_fn, optimizer):
     size = len(dataloader.dataset)
     model.train()
-    for batch, (X, y) in enumerate(dataloader):
+    for example, (X, y) in enumerate(dataloader):
         X, y = X, y
 
         # Compute prediction error
@@ -52,9 +73,16 @@ def train(dataloader, model, loss_fn, optimizer):
         optimizer.step()
         optimizer.zero_grad()
 
-        if batch % 5 == 0:
-            loss, current = loss.item(), (batch + 1) * len(X)
+        '''
+        Use TQDM instead.
+        
+        if example % 5 == 0:
+            loss, current = loss.item(), (example + 1) * len(X)
             print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
+            
+        '''
+
+    return loss
 
 # Testing loop
 def test(dataloader, model, loss_fn):
@@ -72,26 +100,42 @@ def test(dataloader, model, loss_fn):
     correct /= size
     print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
 
+    return test_loss
+
 
 dataset = prepare_input_data("email_spam.csv")
-torch_dataset = SpamDataset(dataset.loc[:,'vector'], dataset.loc[:,'class'])
+vocab = build_vocab(dataset)
+dataset = tokenize_with_vocab(dataset, vocab)
+
+torch_dataset = SpamDataset(torch.tensor(dataset.loc[:,'vectors']), dataset.loc[:,'class'])
 print("The length of the dataset is:", len(torch_dataset))
 train_len = int(len(torch_dataset) * 2 / 3)
 train_data, test_data = random_split(torch_dataset, [train_len, len(torch_dataset) - train_len])
 print("The length of train data is:",len(train_data))
 print("The length of test data is:",len(test_data))
 
+# Magic numbers
+sentence_length = 70
+vocab_len = len(vocab)
+
 # Create data loaders.
 train_dataloader = DataLoader(train_data, batch_size=BATCH)
 test_dataloader = DataLoader(test_data, batch_size=BATCH)
 
-model = NeuralNetwork()
+model = NeuralNetwork(vocab_len, sentence_length)
+early_stopper = EarlyStopper(patience=3)
 
 loss_fn = nn.CrossEntropyLoss()
-optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
+optimizer = torch.optim.Adam(model.parameters())
 
 for t in range(EPOCHS):
     print(f"Epoch {t+1}\n-------------------------------")
-    train(train_dataloader, model, loss_fn, optimizer)
-    test(test_dataloader, model, loss_fn)
+    train_loss = train(train_dataloader, model, loss_fn, optimizer)
+    test_loss = test(test_dataloader, model, loss_fn)
+
+    print(f"Train Loss: {train_loss:>5f}\nTest Loss: {test_loss:>5f}\n")
+
+    if early_stopper.early_stop(test_loss):
+        break
+
 print("Done!")
