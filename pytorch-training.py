@@ -7,7 +7,7 @@ EPOCHS = 1024
 BATCH = 64
 
 class EarlyStopper:
-    def __init__(self, patience=1, min_delta=0):
+    def __init__(self, patience=8, min_delta=0):
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
@@ -62,7 +62,7 @@ def train(dataloader, model, loss_fn, optimizer):
     size = len(dataloader.dataset)
     model.train()
     for example, (X, y) in enumerate(dataloader):
-        X, y = X, y
+        X, y = X.to(device), y.to(device)
 
         # Compute prediction error
         pred = model(X)
@@ -92,7 +92,7 @@ def test(dataloader, model, loss_fn):
     test_loss, correct = 0, 0
     with torch.no_grad():
         for X, y in dataloader:
-            X, y = X, y
+            X, y = X.to(device), y.to(device)
             pred = model(X)
             test_loss += loss_fn(pred, y).item()
             correct += (pred.argmax(1) == y).type(torch.float).sum().item()
@@ -102,6 +102,15 @@ def test(dataloader, model, loss_fn):
 
     return test_loss
 
+#detect device
+device = (
+    "cuda"
+    if torch.cuda.is_available()
+    else "mps"
+    if torch.backends.mps.is_available()
+    else "cpu"
+)
+print(f"Using {device} device")
 
 dataset = prepare_input_data("email_spam.csv")
 vocab = build_vocab(dataset)
@@ -109,10 +118,12 @@ dataset = tokenize_with_vocab(dataset, vocab)
 
 torch_dataset = SpamDataset(torch.tensor(dataset.loc[:,'vectors']), dataset.loc[:,'class'])
 print("The length of the dataset is:", len(torch_dataset))
-train_len = int(len(torch_dataset) * 2 / 3)
-train_data, test_data = random_split(torch_dataset, [train_len, len(torch_dataset) - train_len])
+test_len = int(len(torch_dataset) * 0.3)
+train_data, tmp_data = random_split(torch_dataset, [len(torch_dataset) - test_len, test_len])
+test_data, validate_data = random_split(tmp_data, [int(test_len / 2), test_len - int(test_len / 2)])
 print("The length of train data is:",len(train_data))
 print("The length of test data is:",len(test_data))
+print("The length of validation data is:",len(validate_data))
 
 # Magic numbers
 sentence_length = 70
@@ -121,8 +132,9 @@ vocab_len = len(vocab)
 # Create data loaders.
 train_dataloader = DataLoader(train_data, batch_size=BATCH)
 test_dataloader = DataLoader(test_data, batch_size=BATCH)
+validate_dataloader = DataLoader(validate_data, batch_size=BATCH)
 
-model = NeuralNetwork(vocab_len, sentence_length)
+model = NeuralNetwork(vocab_len, sentence_length).to(device)
 early_stopper = EarlyStopper(patience=3)
 
 loss_fn = nn.CrossEntropyLoss()
@@ -137,5 +149,9 @@ for t in range(EPOCHS):
 
     if early_stopper.early_stop(test_loss):
         break
+
+print(f"Validation\n-------------------------------")
+
+test(validate_dataloader, model, loss_fn)
 
 print("Done!")
