@@ -2,12 +2,14 @@ from clean_csv import prepare_input_data, get_vocab_len, build_vocab, tokenize_w
 from torch.utils.data import Dataset, random_split, DataLoader
 from torch import nn
 import torch
+from torch.utils.tensorboard import SummaryWriter
+
 
 EPOCHS = 1024
 BATCH = 64
 
 class EarlyStopper:
-    def __init__(self, patience=8, min_delta=0):
+    def __init__(self, patience=20, min_delta=0):
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
@@ -49,7 +51,7 @@ class NeuralNetwork(nn.Module):
 
     def forward(self, x):
         x = self.word_embeddings(x)
-        x, (final_hidden_state, final_cell_state) = self.lstm1(x)
+        x, _ = self.lstm1(x)
         x = self.flat(x)
         x = self.linear1(x)
         x = self.relu1(x)
@@ -73,15 +75,6 @@ def train(dataloader, model, loss_fn, optimizer):
         optimizer.step()
         optimizer.zero_grad()
 
-        '''
-        Use TQDM instead.
-        
-        if example % 5 == 0:
-            loss, current = loss.item(), (example + 1) * len(X)
-            print(f"loss: {loss:>7f}  [{current:>5d}/{size:>5d}]")
-            
-        '''
-
     return loss
 
 # Testing loop
@@ -100,58 +93,65 @@ def test(dataloader, model, loss_fn):
     correct /= size
     print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n")
 
-    return test_loss
+    return test_loss, correct
 
-#detect device
-device = (
-    "cuda"
-    if torch.cuda.is_available()
-    else "mps"
-    if torch.backends.mps.is_available()
-    else "cpu"
-)
-print(f"Using {device} device")
+if __name__== '__main__':
+    writer = SummaryWriter()
 
-dataset = prepare_input_data("email_spam.csv")
-vocab = build_vocab(dataset)
-dataset = tokenize_with_vocab(dataset, vocab)
+    #detect device
+    device = (
+        "cuda"
+        if torch.cuda.is_available()
+        else "mps"
+        if torch.backends.mps.is_available()
+        else "cpu"
+    )
+    print(f"Using {device} device")
 
-torch_dataset = SpamDataset(torch.tensor(dataset.loc[:,'vectors']), dataset.loc[:,'class'])
-print("The length of the dataset is:", len(torch_dataset))
-test_len = int(len(torch_dataset) * 0.3)
-train_data, tmp_data = random_split(torch_dataset, [len(torch_dataset) - test_len, test_len])
-test_data, validate_data = random_split(tmp_data, [int(test_len / 2), test_len - int(test_len / 2)])
-print("The length of train data is:",len(train_data))
-print("The length of test data is:",len(test_data))
-print("The length of validation data is:",len(validate_data))
+    dataset = prepare_input_data("email_spam.csv")
+    vocab = build_vocab(dataset)
+    dataset = tokenize_with_vocab(dataset, vocab)
 
-# Magic numbers
-sentence_length = 70
-vocab_len = len(vocab)
+    torch_dataset = SpamDataset(torch.tensor(dataset.loc[:,'vectors']), dataset.loc[:,'class'])
+    print("The length of the dataset is:", len(torch_dataset))
+    test_len = int(len(torch_dataset) * 0.3)
+    train_data, tmp_data = random_split(torch_dataset, [len(torch_dataset) - test_len, test_len])
+    test_data, validate_data = random_split(tmp_data, [int(test_len / 2), test_len - int(test_len / 2)])
+    print("The length of train data is:",len(train_data))
+    print("The length of test data is:",len(test_data))
+    print("The length of validation data is:",len(validate_data))
 
-# Create data loaders.
-train_dataloader = DataLoader(train_data, batch_size=BATCH)
-test_dataloader = DataLoader(test_data, batch_size=BATCH)
-validate_dataloader = DataLoader(validate_data, batch_size=BATCH)
+    # Magic numbers
+    sentence_length = 70
+    vocab_len = len(vocab)
 
-model = NeuralNetwork(vocab_len, sentence_length).to(device)
-early_stopper = EarlyStopper(patience=3)
+    # Create data loaders.
+    train_dataloader = DataLoader(train_data, batch_size=BATCH)
+    test_dataloader = DataLoader(test_data, batch_size=BATCH)
+    validate_dataloader = DataLoader(validate_data, batch_size=BATCH)
 
-loss_fn = nn.CrossEntropyLoss()
-optimizer = torch.optim.Adam(model.parameters())
+    model = NeuralNetwork(vocab_len, sentence_length).to(device)
+    early_stopper = EarlyStopper(patience=20)
 
-for t in range(EPOCHS):
-    print(f"Epoch {t+1}\n-------------------------------")
-    train_loss = train(train_dataloader, model, loss_fn, optimizer)
-    test_loss = test(test_dataloader, model, loss_fn)
+    loss_fn = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters())
 
-    print(f"Train Loss: {train_loss:>5f}\nTest Loss: {test_loss:>5f}\n")
+    for t in range(EPOCHS):
+        print(f"Epoch {t+1}\n-------------------------------")
+        train_loss = train(train_dataloader, model, loss_fn, optimizer)
+        validate_loss, validate_acc = test(validate_dataloader, model, loss_fn)
 
-    if early_stopper.early_stop(test_loss):
-        break
+        print(f"Train Loss: {train_loss:>5f}\nTest Loss: {validate_loss:>5f}\n")
+        writer.add_scalar("Loss/train", train_loss, t)
+        writer.add_scalar("Loss/validate", validate_loss, t)
+        writer.add_scalar("Validate accuracy", validate_acc, t)
 
-print(f"Validation\n-------------------------------")
+        if early_stopper.early_stop(validate_loss):
+            break
 
-test(validate_dataloader, model, loss_fn)
+    print(f"Validation\n-------------------------------")
 
-print("Done!")
+    test(test_dataloader, model, loss_fn)
+
+    writer.close()
+    print("Done!")
