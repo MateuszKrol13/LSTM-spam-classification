@@ -27,8 +27,9 @@ input_length = len(train_X[0])
 model = tf.keras.models.Sequential()
 # model.add(tf.keras.layers.LSTM(64))
 model.add(tf.keras.layers.Input(input_length))
-model.add(tf.keras.layers.Dense(32, activation='relu'))
-model.add(tf.keras.layers.Dense(32, activation='relu'))
+model.add(tf.keras.layers.Dense(128, activation='relu'))
+model.add(tf.keras.layers.Dense(128, activation='relu'))
+model.add(tf.keras.layers.Dense(64, activation='relu'))
 model.add(tf.keras.layers.Dense(1, activation='sigmoid'))
 
 # Print the model summary
@@ -40,21 +41,23 @@ model.compile(loss=tf.keras.losses.BinaryCrossentropy(from_logits=False),
               optimizer='adam')
 
 # Callbacks
-es = EarlyStopping(patience=3,
+es = EarlyStopping(patience=20,
                    monitor='val_accuracy',
                    restore_best_weights=True)
 
-lr = ReduceLROnPlateau(patience=2,
+lr = ReduceLROnPlateau(patience=5,
                        monitor='val_loss',
                        factor=0.5,
                        verbose=0)
 
+tensorboard = tf.keras.callbacks.TensorBoard(histogram_freq=1)
+
 # Train the model
 history = model.fit(train_X, train_Y,
                     validation_data=(validate_X, validate_Y),
-                    epochs=20,
+                    epochs=100,
                     batch_size=4,
-                    callbacks=[lr, es]
+                    callbacks=[lr, es, tensorboard]
                     )
 
 # Predict
